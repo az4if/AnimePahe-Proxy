@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { CONFIG } from './config.js';
+import { registerDownloadRoutes } from './download-handler.js';
 
 const require = createRequire(import.meta.url);
 const cloudscraper = require('cloudscraper');
@@ -21,7 +22,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
 });
-// ----------------------------------------------------------------------
 
 function createSafeSender(res) {
     let sent = false;
@@ -37,9 +37,7 @@ function createSafeSender(res) {
 
 function isOriginAllowed(origin, hasUrlParam) {
     const allowed = CONFIG.ALLOWED_ORIGINS;
-    // Empty allowlist (or "*") = open proxy. Set ALLOWED_ORIGINS in env to lock it down.
     if (!allowed || allowed.length === 0 || allowed.includes('*')) return true;
-    // Non-browser / direct hits send no Origin; allow them as long as a target url is present.
     if (!origin && hasUrlParam) return true;
     return allowed.includes(origin);
 }
@@ -137,10 +135,6 @@ function setCorsHeaders(req, res) {
     const allowed = CONFIG.ALLOWED_ORIGINS;
     const permissive = !allowed || allowed.length === 0 || allowed.includes('*');
 
-    // The player loads sources with withCredentials on quality switches; a "*"
-    // ACAO is rejected by the browser for credentialed requests, so echo the
-    // caller's origin when we trust it and advertise credentials. Fall back to
-    // "*" (no credentials) for origin-less/direct hits.
     if (origin && (permissive || allowed.includes(origin))) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -220,7 +214,6 @@ app.get("/m3u8-proxy", async (req, res) => {
         const headersParam = req.query.headers ? decodeURIComponent(req.query.headers) : "";
         const headers = buildUpstreamHeaders(req, url, headersParam);
 
-        // --- CRITICAL FIX 2: Replaced process.env race condition with strictSSL option ---
         const ignoreTls = url.pathname.endsWith(".mp4"); 
 
         const options = {
@@ -232,7 +225,6 @@ app.get("/m3u8-proxy", async (req, res) => {
             timeout: 20000,
             strictSSL: !ignoreTls 
         };
-        // ---------------------------------------------------------------------------------
 
         try {
             const targetResponse = await cloudscraper(options);
@@ -287,6 +279,8 @@ app.get("/m3u8-proxy", async (req, res) => {
         }
     }
 });
+
+registerDownloadRoutes(app);
 
 app.listen(CONFIG.PORT, () => {
     console.log(`Server listening on PORT: ${CONFIG.PORT}`);
