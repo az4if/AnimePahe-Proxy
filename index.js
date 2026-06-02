@@ -35,10 +35,13 @@ function createSafeSender(res) {
     };
 }
 
-function isOriginAllowed(origin) {
-    if (!origin) return false;
-    const allowedOrigins = ['https://yourdoman.com', 'http://yourdomain.com'];
-    return allowedOrigins.includes(origin);
+function isOriginAllowed(origin, hasUrlParam) {
+    const allowed = CONFIG.ALLOWED_ORIGINS;
+    // Empty allowlist (or "*") = open proxy. Set ALLOWED_ORIGINS in env to lock it down.
+    if (!allowed || allowed.length === 0 || allowed.includes('*')) return true;
+    // Non-browser / direct hits send no Origin; allow them as long as a target url is present.
+    if (!origin && hasUrlParam) return true;
+    return allowed.includes(origin);
 }
 
 function buildUpstreamHeaders(req, url, headersParam) {
@@ -131,13 +134,24 @@ function updateCookieJar(url, targetResponse) {
 
 function setCorsHeaders(req, res) {
     const origin = req.headers.origin;
-    const allowedOrigin = (origin === 'https://yourdomain.com' || origin === 'http://yourdomain.com') ? origin : 'https://yourdomain.com';
-    
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    const allowed = CONFIG.ALLOWED_ORIGINS;
+    const permissive = !allowed || allowed.length === 0 || allowed.includes('*');
+
+    // The player loads sources with withCredentials on quality switches; a "*"
+    // ACAO is rejected by the browser for credentialed requests, so echo the
+    // caller's origin when we trust it and advertise credentials. Fall back to
+    // "*" (no credentials) for origin-less/direct hits.
+    if (origin && (permissive || allowed.includes(origin))) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', CONFIG.CORS.ALLOW_METHODS);
     res.setHeader('Access-Control-Allow-Headers', CONFIG.CORS.ALLOW_HEADERS);
     res.setHeader('Access-Control-Expose-Headers', CONFIG.CORS.EXPOSE_HEADERS);
-    res.setHeader('Access-Control-Allow-Credentials', CONFIG.CORS.ALLOW_CREDENTIALS);
     res.setHeader('Cache-Control', CONFIG.CACHE_CONTROL);
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -183,11 +197,16 @@ app.get('/', (req, res) => {
     res.status(200).send("Welcome to site");
 });
 
+app.options('/m3u8-proxy', (req, res) => {
+    setCorsHeaders(req, res);
+    res.status(204).end();
+});
+
 app.get("/m3u8-proxy", async (req, res) => {
     const safeSend = createSafeSender(res);
     const origin = req.headers.origin || "";
 
-    if (!isOriginAllowed(origin)) {
+    if (!isOriginAllowed(origin, !!req.query.url)) {
         return safeSend(403, `The origin "${origin}" is not allowed to use this proxy.`);
     }
 

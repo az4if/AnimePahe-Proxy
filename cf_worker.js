@@ -106,8 +106,13 @@ function updateCookieJar(url, response) {
 }
 
 function setCorsHeaders(request, responseHeaders) {
-    const origin = request.headers.get('origin') || '*';
-    responseHeaders.set('Access-Control-Allow-Origin', origin);
+    const origin = request.headers.get('origin');
+    if (origin) {
+        responseHeaders.set('Access-Control-Allow-Origin', origin);
+        responseHeaders.set('Access-Control-Allow-Credentials', 'true');
+    } else {
+        responseHeaders.set('Access-Control-Allow-Origin', '*');
+    }
     responseHeaders.set('Access-Control-Allow-Methods', CONFIG.CORS.ALLOW_METHODS);
     responseHeaders.set('Access-Control-Allow-Headers', CONFIG.CORS.ALLOW_HEADERS);
     responseHeaders.set('Access-Control-Expose-Headers', CONFIG.CORS.EXPOSE_HEADERS);
