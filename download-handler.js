@@ -1,5 +1,8 @@
-import { Readable } from 'stream';
 import { CONFIG } from './config.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const cloudscraper = require('cloudscraper');
 
 const DOWNLOAD_REFERER = 'https://kwik.cx/';
 const FORWARDED_RESPONSE_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag'];
@@ -48,32 +51,42 @@ export async function handleDownload(req, res) {
     let filename = decodeURIComponent(req.path.split('/').pop() || '') || 'video.mp4';
     filename = filename.replace(/[\r\n]/g, '');
 
-    const headers = { 'User-Agent': CONFIG.DEFAULT_USER_AGENT, 'Referer': DOWNLOAD_REFERER, 'Accept': '*/*' };
+    const headers = {
+        'User-Agent': CONFIG.DEFAULT_USER_AGENT,
+        'Referer': DOWNLOAD_REFERER,
+        'Accept': '*/*',
+    };
     if (req.headers.range) headers['Range'] = req.headers.range;
 
-    let upstream;
-    try {
-        upstream = await fetch(target.href, { method: req.method, headers, redirect: 'follow' });
-    } catch (e) {
-        return res.status(502).send(`Upstream fetch failed: ${e.message}`);
-    }
-
-    FORWARDED_RESPONSE_HEADERS.forEach(h => {
-        const v = upstream.headers.get(h);
-        if (v) res.setHeader(h, v);
+    const upstream = cloudscraper({
+        method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+        uri: target.href,
+        headers,
+        encoding: null,
+        strictSSL: false,
+        followAllRedirects: true,
     });
-    res.setHeader('Content-Disposition', buildContentDisposition(filename));
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(upstream.status);
 
-    if (req.method === 'HEAD' || !upstream.body) {
-        return res.end();
-    }
+    let responded = false;
+    upstream.on('response', (resp) => {
+        responded = true;
+        FORWARDED_RESPONSE_HEADERS.forEach(h => {
+            const v = resp.headers[h];
+            if (v) res.setHeader(h, v);
+        });
+        res.setHeader('Content-Disposition', buildContentDisposition(filename));
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(resp.statusCode);
+    });
 
-    const stream = Readable.fromWeb(upstream.body);
-    stream.on('error', () => res.destroy());
-    res.on('close', () => stream.destroy());
-    stream.pipe(res);
+    upstream.on('error', (e) => {
+        if (!responded && !res.headersSent) res.status(502).send(`Upstream fetch failed: ${e.message}`);
+        else res.destroy();
+    });
+
+    res.on('close', () => { try { upstream.abort(); } catch { /* noop */ } });
+
+    upstream.pipe(res);
 }
 
 export function registerDownloadRoutes(app) {
